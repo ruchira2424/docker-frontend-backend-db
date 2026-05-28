@@ -1,0 +1,93 @@
+name: Multi-Container Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - ruchira-devops-development
+
+env:
+  PROJECT_ID: "loyal-burner-493907-u6"
+  REGION: "us-central1"
+  REPOSITORY: "appointment-booking-repo"
+  
+  # Image and Service names
+  FRONTEND_NAME: "appointment-frontend"
+  BACKEND_NAME: "appointment-backend"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 3. Setup Cloud SDK
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 4. Configure Docker Authentication
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # ==================== BACKEND STAGE ====================
+      - name: Build Backend Image
+        run: |
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }} ./backend
+
+      - name: Push Backend Image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }}
+
+      - name: Deploy Backend to Cloud Run
+        id: deploy-backend
+        run: |
+          gcloud run deploy ${{ env.BACKEND_NAME }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 512Mi \
+            --cpu 1
+
+      # ==================== FRONTEND STAGE ====================
+      # We extract the backend URL so the frontend knows where to send API requests
+      - name: Get Backend URL
+        run: |
+          BACKEND_URL=$(gcloud run services describe ${{ env.BACKEND_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "BACKEND_API_URL=$BACKEND_URL" >> $GITHUB_ENV
+
+      - name: Build Frontend Image
+        run: |
+          docker build \
+            --build-arg REACT_APP_API_URL=${{ env.BACKEND_API_URL }} \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.FRONTEND_NAME }}:${{ github.run_number }} ./frontend
+
+      - name: Push Frontend Image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.FRONTEND_NAME }}:${{ github.run_number }}
+
+      - name: Deploy Frontend to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.FRONTEND_NAME }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.FRONTEND_NAME }}:${{ github.run_number }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 80 \
+            --memory 512Mi \
+            --cpu 1
+
+      # ==================== CLEANUP ====================
+      - name: Docker Cleanup
+        if: always()
+        run: docker system prune -af || true
