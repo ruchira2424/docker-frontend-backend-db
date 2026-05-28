@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - ruchira-devops-development
+  workflow_dispatch: # Allows you to manually trigger the workflow from the GitHub Actions tab
 
 env:
   PROJECT_ID: "loyal-burner-493907-u6"
@@ -60,7 +61,7 @@ jobs:
             --cpu 1
 
       # ==================== FRONTEND STAGE ====================
-      # We extract the backend URL so the frontend knows where to send API requests
+      # Extract the dynamic URL of the deployed backend service
       - name: Get Backend URL
         run: |
           BACKEND_URL=$(gcloud run services describe ${{ env.BACKEND_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
