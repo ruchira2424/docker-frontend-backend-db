@@ -49,14 +49,13 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }}
 
       - name: Deploy Backend to Cloud Run
-        id: deploy-backend
         run: |
           gcloud run deploy ${{ env.BACKEND_NAME }} \
             --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }} \
             --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --port 8080 \
+            --port 3001 \
             --memory 512Mi \
             --cpu 1
 
