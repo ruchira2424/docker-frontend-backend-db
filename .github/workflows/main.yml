@@ -1,93 +1,67 @@
-name: Multi-Container Deploy to Cloud Run
+name: Deploy to Cloud Run
 
 on:
   push:
     branches:
-      - ruchira-devops-development
-  workflow_dispatch: # Allows you to manually trigger the workflow from the GitHub Actions tab
-
-env:
-  PROJECT_ID: "loyal-burner-493907-u6"
-  REGION: "us-central1"
-  REPOSITORY: "appointment-booking-repo"
-  
-  # Image and Service names
-  FRONTEND_NAME: "appointment-frontend"
-  BACKEND_NAME: "appointment-backend"
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    steps:
-      # 1. Checkout Code
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    permissions:
+      contents: read
+      id-token: write
 
-      # 2. Authenticate to Google Cloud
-      - name: Authenticate to Google Cloud
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      # 3. Setup Cloud SDK
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      # 4. Configure Docker Authentication
-      - name: Configure Docker
+      - name: Set up Docker
         run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          gcloud auth configure-docker us-central1-docker.pkg.dev
 
-      # ==================== BACKEND STAGE ====================
-      - name: Build Backend Image
+      - name: Build and push backend
         run: |
-          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }} ./backend
+          docker build -t us-central1-docker.pkg.dev/loyal-burner-493907-u6/todo-repo/backend:latest ./backend
+          docker push us-central1-docker.pkg.dev/loyal-burner-493907-u6/todo-repo/backend:latest
 
-      - name: Push Backend Image
+      - name: Build and push frontend
         run: |
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }}
+          docker build -t us-central1-docker.pkg.dev/loyal-burner-493907-u6/todo-repo/frontend:latest ./frontend
+          docker push us-central1-docker.pkg.dev/loyal-burner-493907-u6/todo-repo/frontend:latest
 
-      - name: Deploy Backend to Cloud Run
+      - name: Deploy backend to Cloud Run
         run: |
-          gcloud run deploy ${{ env.BACKEND_NAME }} \
-            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.BACKEND_NAME }}:${{ github.run_number }} \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 3001 \
-            --memory 512Mi \
-            --cpu 1
+          gcloud run deploy backend \
+            --image=us-central1-docker.pkg.dev/loyal-burner-493907-u6/todo-repo/backend:latest \
+            --region=us-central1 \
+            --platform=managed \
+            --allow-unauthenticated
 
-      # ==================== FRONTEND STAGE ====================
-      # Extract the dynamic URL of the deployed backend service
-      - name: Get Backend URL
+      - name: Deploy frontend to Cloud Run
         run: |
-          BACKEND_URL=$(gcloud run services describe ${{ env.BACKEND_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
-          echo "BACKEND_API_URL=$BACKEND_URL" >> $GITHUB_ENV
+          gcloud run deploy frontend \
+            --image=us-central1-docker.pkg.dev/loyal-burner-493907-u6/todo-repo/frontend:latest \
+            --region=us-central1 \
+            --platform=managed \
+            --allow-unauthenticated
 
-      - name: Build Frontend Image
-        run: |
-          docker build \
-            --build-arg REACT_APP_API_URL=${{ env.BACKEND_API_URL }} \
-            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.FRONTEND_NAME }}:${{ github.run_number }} ./frontend
-
-      - name: Push Frontend Image
-        run: |
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.FRONTEND_NAME }}:${{ github.run_number }}
-
-      - name: Deploy Frontend to Cloud Run
-        run: |
-          gcloud run deploy ${{ env.FRONTEND_NAME }} \
-            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.FRONTEND_NAME }}:${{ github.run_number }} \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 80 \
-            --memory 512Mi \
-            --cpu 1
-
-      # ==================== CLEANUP ====================
-      - name: Docker Cleanup
+      - name: Send Google Chat Notification
         if: always()
-        run: docker system prune -af || true
+        run: |
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            MSG="✅ Deployment successful! Frontend and Backend deployed to Cloud Run."
+          else
+            MSG="❌ Deployment failed! Check GitHub Actions logs."
+          fi
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"$MSG\"}" \
+            ${{ secrets.GCHAT_WEBHOOK_URL }}
